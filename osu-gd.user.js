@@ -1,16 +1,18 @@
 // ==UserScript==
 // @name         osu!GD
-// @namespace sayama-kaede
-// @author       Sayama Kaede
+// @namespace flower-iroseka
+// @author       Chengyu Liu
 // @version      0.0.6
-// @description  プロフィールに、そのユーザーの Pending・Graveyard のゲスト難易度の譜面を表示します
+// @description  在个人资料中显示该用户 Pending 和 Graveyard 分类下的 Guest 难度谱面
 // @match        https://osu.ppy.sh/users/*
 // @run-at       document-idle
 // @grant        none
-// @homepageURL  https://github.com/SayamaKaede/osu-gd
-// @updateURL    https://raw.githubusercontent.com/SayamaKaede/osu-gd/main/osu-gd.user.js
-// @downloadURL  https://raw.githubusercontent.com/SayamaKaede/osu-gd/main/osu-gd.user.js
+// @homepageURL  https://github.com/flower-iroseka/osu-gd
+// @updateURL    https://raw.githubusercontent.com/flower-iroseka/osu-gd/main/osu-gd.user.js
+// @downloadURL  https://raw.githubusercontent.com/flower-iroseka/osu-gd/main/osu-gd.user.js
 // ==/UserScript==
+
+// Fork of osu-gd by Sayama Kaede (https://github.com/SayamaKaede/osu-gd)
 
 (function () {
     'use strict';
@@ -28,37 +30,103 @@
 
     const DOTS_LIMIT = 12;
 
-    const JAPANESE = (document.documentElement.lang || '').startsWith('ja');
+    const LANG = (document.documentElement.lang || '').toLowerCase();
+    const LANG_KEY = LANG.startsWith('zh') ? 'zh' : LANG.startsWith('ja') ? 'ja' : 'en';
+
+    // 中日英术语表：每个 key 在 zh / ja / en 三栏各有一条，
+    // 运行时按页面语言（document.documentElement.lang）选择对应的一栏。
+    const I18N = {
+        zh: {
+            sectionPending: '客串难度的待定 (Pending) 谱面',
+            sectionGraveyard: '客串难度的已停更谱面',
+            signedOutNotice: '登录 osu! 后即可查看',
+            showMore: '显示更多',
+            loading: '加载中…',
+            status: { pending: '待定 (Pending)', wip: '制作中 (WIP)', graveyard: '坟场 (Graveyard)' },
+            badge: {
+                nsfw: '不良内容',
+                spotlight: '聚光灯',
+                featured_artist: '精选艺术家',
+            },
+            nominationPattern: '提名',
+            locale: 'zh-CN',
+            logPrefix: '[客串难度]',
+        },
+        ja: {
+            sectionPending: 'ゲスト難易度のPendingビートマップ',
+            sectionGraveyard: 'ゲスト難易度のGraveyardビートマップ',
+            signedOutNotice: 'osu!にログインすると表示されます',
+            showMore: 'もっと見る',
+            loading: '読み込み中…',
+            status: { pending: 'Pending', wip: 'WIP', graveyard: 'Graveyard' },
+            badge: {
+                nsfw: '過激表現を含む',
+                spotlight: 'スポットライト',
+                featured_artist: '注目アーティスト',
+            },
+            nominationPattern: 'ノミネート',
+            locale: 'ja-JP',
+            logPrefix: '[ゲスト難易度]',
+        },
+        en: {
+            sectionPending: 'Pending Guest Participation Beatmaps',
+            sectionGraveyard: 'Graveyarded Guest Participation Beatmaps',
+            signedOutNotice: 'Sign in to osu! to see these',
+            showMore: 'show more',
+            loading: 'loading…',
+            status: { pending: 'Pending', wip: 'WIP', graveyard: 'Graveyard' },
+            badge: {
+                nsfw: 'Explicit',
+                spotlight: 'Spotlight',
+                featured_artist: 'Featured Artist',
+            },
+            nominationPattern: 'nominate',
+            locale: 'en-GB',
+            logPrefix: '[Guest difficulties]',
+        },
+    };
+
+    const T = I18N[LANG_KEY];
 
     const SECTIONS = [
         {
             id: 'pending',
-            title: JAPANESE ? 'ゲスト難易度のPendingビートマップ' : 'Pending Guest Participation Beatmaps',
+            title: T.sectionPending,
             states: ['pending', 'wip'],
         },
         {
             id: 'graveyard',
-            title: JAPANESE ? 'ゲスト難易度のGraveyardビートマップ' : 'Graveyarded Guest Participation Beatmaps',
+            title: T.sectionGraveyard,
             states: ['graveyard'],
         },
     ];
 
-    const SIGNED_OUT_NOTICE = JAPANESE ? 'osu!にログインすると表示されます' : 'Sign in to osu! to see these';
-    const SHOW_MORE = JAPANESE ? 'もっと見る' : 'show more';
-    const LOADING = JAPANESE ? '読み込み中…' : 'loading…';
+    const SIGNED_OUT_NOTICE = T.signedOutNotice;
+    const SHOW_MORE = T.showMore;
+    const LOADING = T.loading;
 
-    const STATUS_LABEL = { pending: 'Pending', wip: 'WIP', graveyard: 'Graveyard' };
-
-    const BADGE_LABEL = {
-        nsfw: JAPANESE ? '過激表現を含む' : 'Explicit',
-        spotlight: JAPANESE ? 'スポットライト' : 'Spotlight',
-        featured_artist: JAPANESE ? '注目アーティスト' : 'Featured Artist',
-    };
+    const STATUS_LABEL = T.status;
+    const BADGE_LABEL = T.badge;
 
     const MODES = ['osu', 'taiko', 'fruits', 'mania'];
 
     let profileId = null;
     let sections = null;
+    let cardSize = null;
+
+    // 沿用网站当前使用的谱面板尺寸（用户设置 beatmapset_card_size），
+    // 而不是写死 --size-extra，否则桌面端高度（140px）会与原页面的 normal（100px）不一致。
+    function siteCardSize() {
+        if (cardSize != null) return cardSize;
+
+        const panel = [...document.querySelectorAll('.beatmapset-panel')]
+            .find((node) => !node.closest(`.${PREFIX}`));
+
+        cardSize = panel?.className.match(/beatmapset-panel--size-(\w+)/)?.[1];
+        if (cardSize !== 'extra') cardSize = 'normal';
+
+        return cardSize;
+    }
 
     async function search(state, cursor) {
         const params = new URLSearchParams({
@@ -105,7 +173,7 @@
 
                 return { stream, sets: keep(json.beatmapsets, section.states) };
             } catch (error) {
-                console.warn('[ゲスト難易度]', stream.state, error);
+                console.warn(T.logPrefix, stream.state, error);
                 stream.done = true;
                 return { stream, sets: [] };
             }
@@ -249,7 +317,7 @@
     }
 
     function buildPopup(set) {
-        const node = element('div', 'beatmaps-popup beatmaps-popup--size-extra');
+        const node = element('div', siteCardSize() === 'extra' ? 'beatmaps-popup beatmaps-popup--size-extra' : 'beatmaps-popup');
         const content = element('div', 'beatmaps-popup__content');
 
         for (const mode of MODES) {
@@ -341,7 +409,7 @@
     }
 
     function number(value) {
-        return (value ?? 0).toLocaleString(JAPANESE ? 'ja-JP' : 'en-GB');
+        return (value ?? 0).toLocaleString(T.locale);
     }
 
     function beatmapsetBadge(set, type) {
@@ -373,7 +441,7 @@
         const link = href(set);
         const hyped = set.hype != null;
 
-        const root = element('div', `beatmapset-panel beatmapset-panel--size-extra${hyped ? ' beatmapset-panel--with-hype-counts' : ''} js-audio--player ${PREFIX}__panel`);
+        const root = element('div', `beatmapset-panel beatmapset-panel--size-${siteCardSize()}${hyped ? ' beatmapset-panel--with-hype-counts' : ''} js-audio--player ${PREFIX}__panel`);
         if (set.preview_url) root.dataset.audioUrl = set.preview_url;
 
         const covers = element('a', 'beatmapset-panel__cover-container');
@@ -494,7 +562,7 @@
         const parsed = new Date(value);
         if (Number.isNaN(parsed.getTime())) return '';
 
-        return parsed.toLocaleDateString(JAPANESE ? 'ja-JP' : 'en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+        return parsed.toLocaleDateString(T.locale, { day: 'numeric', month: 'short', year: 'numeric' });
     }
 
     function preferOriginal() {
@@ -583,7 +651,7 @@
 
         const heading = theirs[theirs.length - 1]?.previousElementSibling;
 
-        return /nominat|ノミネート/i.test(heading?.textContent ?? '') ? heading : null;
+        return new RegExp(T.nominationPattern, 'i').test(heading?.textContent ?? '') ? heading : null;
     }
 
     function render() {
@@ -667,6 +735,7 @@
             address = location.pathname;
             started = false;
             profileId = null;
+            cardSize = null;
         }
 
         if (started) {
@@ -681,7 +750,7 @@
 
         started = true;
         style();
-        start().catch((error) => console.error('[ゲスト難易度]', error));
+        start().catch((error) => console.error(T.logPrefix, error));
     }
 
     new MutationObserver(tick).observe(document.body, { childList: true, subtree: true });
