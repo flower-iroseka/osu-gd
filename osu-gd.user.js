@@ -2,7 +2,7 @@
 // @name         osu!GD
 // @namespace flower-iroseka
 // @author       Chengyu Liu
-// @version      0.0.6
+// @version      0.0.7
 // @description  在个人资料中显示该用户 Pending 和 Graveyard 分类下的 Guest 难度谱面
 // @match        https://osu.ppy.sh/users/*
 // @run-at       document-idle
@@ -527,7 +527,7 @@
         const covers = element('a', 'beatmapset-panel__cover-container');
         covers.href = link;
 
-        for (const [col, size] of [['play', 'list'], ['info', 'cover']]) {
+        for (const [col, size] of [['play', 'list'], ['info', 'card']]) {
             const column = element('div', `beatmapset-panel__cover-col beatmapset-panel__cover-col--${col}`);
             column.append(cover(set, size));
             covers.append(column);
