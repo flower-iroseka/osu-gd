@@ -33,8 +33,11 @@
     const LANG = (document.documentElement.lang || '').toLowerCase();
     const LANG_KEY = LANG.startsWith('zh') ? 'zh' : LANG.startsWith('ja') ? 'ja' : 'en';
 
-    // 中日英术语表：每个 key 在 zh / ja / en 三栏各有一条，
-    // 运行时按页面语言（document.documentElement.lang）选择对应的一栏。
+    // 界面文字对应的 i18n 字符串
+    // zh: 中文（简体中文）
+    // ja: 日文
+    // en: 英文
+    // 脚本根据 document.documentElement.lang 选择对应的语言
     const I18N = {
         zh: {
             sectionPending: '客串难度的待定 (Pending) 谱面',
@@ -114,8 +117,7 @@
     let sections = null;
     let cardSize = null;
 
-    // 沿用网站当前使用的谱面板尺寸（用户设置 beatmapset_card_size），
-    // 而不是写死 --size-extra，否则桌面端高度（140px）会与原页面的 normal（100px）不一致。
+    // beatmapset card 的尺寸来自用户的 beatmapset_card_size 设置
     function siteCardSize() {
         if (cardSize != null) return cardSize;
 
@@ -278,8 +280,12 @@
         return luminance < 0.18 ? '#ffffff' : '#000000';
     }
 
+    const POPUP_FADE = 150;       // 淡入淡出时长，和 osu! 的 beatmaps-popup 一致
+    const POPUP_HIDE_DELAY = 500; // 鼠标移开后多久开始收起，和 osu! 一致
+
     let popup = null;
     let popupPanel = null;
+    let hideTimer = null;
 
     function portal() {
         return document.querySelector('.js-portal') ?? document.body;
@@ -317,7 +323,7 @@
     }
 
     function buildPopup(set) {
-        const node = element('div', siteCardSize() === 'extra' ? 'beatmaps-popup beatmaps-popup--size-extra' : 'beatmaps-popup');
+        const node = element('div', `beatmaps-popup${siteCardSize() === 'extra' ? ' beatmaps-popup--size-extra' : ''} ${PREFIX}__popup`);
         const content = element('div', 'beatmaps-popup__content');
 
         for (const mode of MODES) {
@@ -336,12 +342,84 @@
         return node;
     }
 
+    function cancelHide() {
+        if (hideTimer == null) return;
+
+        window.clearTimeout(hideTimer);
+        hideTimer = null;
+    }
+
+    // 隔 POPUP_HIDE_DELAY 再收起，和 osu! 自己的卡片一致
+    function scheduleHide() {
+        cancelHide();
+        hideTimer = window.setTimeout(() => {
+            hideTimer = null;
+            closePopup();
+        }, POPUP_HIDE_DELAY);
+    }
+
+    // 鼠标离开那一行或难度列表后，落在难度列表上就不关，还在卡片上就延时收起，离开卡片就立刻收起
+    function onPointerLeave(target) {
+        if (popup?.contains(target)) {
+            cancelHide();
+            return;
+        }
+
+        if (popupPanel?.contains(target)) {
+            scheduleHide();
+            return;
+        }
+
+        closePopup();
+    }
+
+    // 立刻收起，没有动画，用于重新渲染和换页
     function hidePopup() {
-        if (popupPanel) popupPanel.classList.remove('beatmapset-panel--beatmaps-popup-visible');
-        if (popup) popup.remove();
+        cancelHide();
+        document.removeEventListener('click', onPopupDocumentClick);
+
+        // 清理页面上所有难度列表的 popup，避免页面恢复或重新渲染后留下关不掉的列表
+        for (const node of document.querySelectorAll(`.${PREFIX}__popup`)) node.remove();
+
+        for (const panel of document.querySelectorAll(`.${PREFIX}__panel.beatmapset-panel--beatmaps-popup-visible`)) {
+            panel.classList.remove('beatmapset-panel--beatmaps-popup-visible');
+        }
 
         popup = null;
         popupPanel = null;
+    }
+
+    // 先淡出再移除，用于用户操作引起的收起；重新渲染和换页用 hidePopup()
+    function closePopup() {
+        cancelHide();
+        document.removeEventListener('click', onPopupDocumentClick);
+
+        const closing = popup;
+
+        // 除正在淡出的难度列表以外，页面上其他的难度列表一并清掉
+        for (const node of document.querySelectorAll(`.${PREFIX}__popup`)) {
+            if (node !== closing) node.remove();
+        }
+
+        for (const panel of document.querySelectorAll(`.${PREFIX}__panel.beatmapset-panel--beatmaps-popup-visible`)) {
+            panel.classList.remove('beatmapset-panel--beatmaps-popup-visible');
+        }
+
+        popup = null;
+        popupPanel = null;
+
+        if (closing == null) return;
+
+        closing.style.opacity = '0';
+        window.setTimeout(() => closing.remove(), POPUP_FADE);
+    }
+
+    // 难度列表打开时，点到卡片和列表以外的地方就关掉，监听只在列表打开的时候挂着
+    function onPopupDocumentClick(event) {
+        if (popupPanel?.contains(event.target)) return;
+        if (popup?.contains(event.target)) return;
+
+        closePopup();
     }
 
     function showPopup(root, set) {
@@ -364,13 +442,13 @@
         popup.style.left = `${box.left - landed.left}px`;
         popup.style.top = `${box.bottom - landed.top}px`;
 
-        popup.addEventListener('mouseleave', (e) => {
-            if (popupPanel && popupPanel.contains(e.relatedTarget)) return;
-            hidePopup();
-        });
+        popup.addEventListener('mouseenter', cancelHide);
+        popup.addEventListener('mouseleave', (e) => onPointerLeave(e.relatedTarget));
 
         popupPanel = root;
         root.classList.add('beatmapset-panel--beatmaps-popup-visible');
+
+        document.addEventListener('click', onPopupDocumentClick);
 
         requestAnimationFrame(() => {
             if (popup) popup.style.opacity = '1';
@@ -443,6 +521,8 @@
 
         const root = element('div', `beatmapset-panel beatmapset-panel--size-${siteCardSize()}${hyped ? ' beatmapset-panel--with-hype-counts' : ''} js-audio--player ${PREFIX}__panel`);
         if (set.preview_url) root.dataset.audioUrl = set.preview_url;
+        // 取消卡片高亮时的过渡时长，osu! 自己的卡片也用这个变量
+        root.style.setProperty('--beatmaps-popup-transition-duration', `${POPUP_FADE}ms`);
 
         const covers = element('a', 'beatmapset-panel__cover-container');
         covers.href = link;
@@ -510,8 +590,12 @@
         const dated = element('div', 'beatmapset-panel__stats-item beatmapset-panel__stats-item--date');
         const dateIcon = element('span', 'beatmapset-panel__stats-item-icon');
         dateIcon.append(element('i', 'fa-fw fas fa-check-circle'));
-        const time = element('time', 'js-tooltip-time', dateText(set.last_updated));
-        if (set.last_updated) time.dateTime = set.last_updated;
+        const time = element('time', 'js-tooltip-time', dateShown(set));
+        if (set.last_updated) {
+            time.dateTime = set.last_updated;
+            // 日期元素带 title 属性，鼠标停在上面时显示完整时间，osu! 自带的日期也是这样
+            time.title = set.last_updated;
+        }
         dated.append(dateIcon, time);
         stats.append(dated);
 
@@ -529,19 +613,17 @@
         extra.append(badgeItem, dots(set));
         info.append(extra);
 
-        extra.addEventListener('mouseenter', () => showPopup(root, set));
+        extra.addEventListener('mouseenter', () => {
+            if (popupPanel === root) {
+                cancelHide();
+                return;
+            }
 
-        root.addEventListener('mouseleave', (e) => {
-            if (popup && popup.contains(e.relatedTarget)) return;
-            hidePopup();
+            showPopup(root, set);
         });
 
-        root.addEventListener('mousemove', (e) => {
-            if (popupPanel !== root) return;
-
-            const box = root.getBoundingClientRect();
-            if (e.clientY < box.top + box.height / 2) hidePopup();
-        });
+        extra.addEventListener('mouseleave', (e) => onPointerLeave(e.relatedTarget));
+        root.addEventListener('mouseleave', (e) => onPointerLeave(e.relatedTarget));
 
         const menuContainer = element('div', 'beatmapset-panel__menu-container');
         const menu = element('div', 'beatmapset-panel__menu');
@@ -557,12 +639,70 @@
         return root;
     }
 
+    // 这些状态没有上架日期，卡片上显示的是最后更新时间
+    const STALE_STATES = ['pending', 'wip'];
+
+    const RELATIVE_STEPS = [
+        ['year', 31536000],
+        ['month', 2592000],
+        ['day', 86400],
+        ['hour', 3600],
+        ['minute', 60],
+        ['second', 1],
+    ];
+
+    let relativeFormat = null;
+
+    // 把时间转成「3 天前」这样的说法，用词由 Intl 按当前语言生成，不用写进翻译表
+    function relativeText(value) {
+        if (!value) return '';
+
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) return '';
+
+        if (relativeFormat == null) {
+            relativeFormat = new Intl.RelativeTimeFormat(T.locale, { numeric: 'always' });
+        }
+
+        const elapsed = Math.max(0, (Date.now() - parsed.getTime()) / 1000);
+        const [unit, size] = RELATIVE_STEPS.find(([, seconds]) => elapsed >= seconds)
+            ?? RELATIVE_STEPS[RELATIVE_STEPS.length - 1];
+
+        return relativeFormat.format(-Math.floor(elapsed / size), unit);
+    }
+
     function dateText(value) {
         if (!value) return '';
+
         const parsed = new Date(value);
         if (Number.isNaN(parsed.getTime())) return '';
 
         return parsed.toLocaleDateString(T.locale, { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+
+    // 相对时间只在 pending / wip 上用；坟场和上架的谱面一样，显示具体日期
+    function dateShown(set) {
+        return STALE_STATES.includes(set.status) ? relativeText(set.last_updated) : dateText(set.last_updated);
+    }
+
+    // 页面自带的卡片由 React 生成，也换成相对时间，只改日期文字，不替换元素
+    function relativeSiteDates() {
+        for (const panel of document.querySelectorAll('.beatmapset-panel')) {
+            if (panel.closest(`.${PREFIX}`)) continue;
+
+            const style = panel.querySelector('.beatmapset-status')?.getAttribute('style') ?? '';
+            if (!STALE_STATES.some((state) => style.includes(`--beatmapset-${state}-bg-hsl`))) continue;
+
+            const time = panel.querySelector('.beatmapset-panel__stats-item--date time');
+            const text = relativeText(time?.getAttribute('datetime'));
+            if (!text) continue;
+
+            if (time.firstChild?.nodeType === 3) {
+                if (time.firstChild.nodeValue !== text) time.firstChild.nodeValue = text;
+            } else {
+                time.textContent = text;
+            }
+        }
     }
 
     function preferOriginal() {
@@ -660,6 +800,9 @@
         const anchor = document.querySelector('.page-extra__beatmapsets')?.closest('.page-extra');
         if (!anchor) return;
 
+        // 关掉该区块的滚动锚定，避免点击「显示更多」时浏览器滚动到新增的卡片底部
+        anchor.classList.add(`${PREFIX}__beatmaps-extra`);
+
         const existing = anchor.querySelector(`.${PREFIX}`);
         const host = existing ?? element('div', PREFIX);
         host.textContent = '';
@@ -694,6 +837,7 @@
                 text-align: left; cursor: pointer;
             }
             .${PREFIX}__notice { color: hsl(var(--hsl-f1)); font-size: 12px; margin-top: 10px; }
+            .${PREFIX}__beatmaps-extra { overflow-anchor: none; }
         `;
 
         document.head.append(css);
@@ -731,11 +875,14 @@
     let address = location.pathname;
 
     function tick() {
+        relativeSiteDates();
+
         if (location.pathname !== address) {
             address = location.pathname;
             started = false;
-            profileId = null;
             cardSize = null;
+            // 页面用客户端路由切换，前进后退不触发 pagehide，难度列表只能在这里收起
+            hidePopup();
         }
 
         if (started) {
@@ -745,15 +892,26 @@
 
         if (!document.querySelector('.page-extra__beatmapsets')) return;
 
-        profileId = idFromPage();
-        if (!profileId) return;
+        const id = idFromPage();
+        if (!id) return;
 
+        // 回到同一个人的资料页时复用已加载的数据，避免重新加载后展开的卡片又收起来
+        if (sections && id === profileId) {
+            started = true;
+            render();
+            return;
+        }
+
+        profileId = id;
         started = true;
         style();
         start().catch((error) => console.error(T.logPrefix, error));
     }
 
-    new MutationObserver(tick).observe(document.body, { childList: true, subtree: true });
+    window.addEventListener('pagehide', hidePopup);
+
+    // 挂到 documentElement 上，避免换页时 Turbo 替换整个 <body> 导致监听失效
+    new MutationObserver(tick).observe(document.documentElement, { childList: true, subtree: true });
     setInterval(tick, 1000);
     tick();
 })();
